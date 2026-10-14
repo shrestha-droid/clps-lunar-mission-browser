@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLPS Lunar Mission Browser</title>
+<style>
+  :root { --bg:#fff; --fg:#111; --muted:#666; --line:#ddd; --sun:#d97706; --earth:#2563eb; --ok:#16a34a33; --sel:#2563eb18; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0b0d12; --fg:#e8e8e8; --muted:#999; --line:#2a2e38; --ok:#22c55e33; --sel:#3b82f633; } }
+  body { margin:0; padding:16px; max-width:960px; margin-inline:auto; font:15px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  h1 { font-size:1.4rem; margin:0 0 4px; } p { color:var(--muted); margin:0 0 16px; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; }
+  th, td { text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  tbody tr { cursor:pointer; } tbody tr[aria-selected=true] { background:var(--sel); }
+  canvas { width:100%; height:300px; display:block; }
+  label { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .key span { margin-right:16px; } .wrap { overflow-x:auto; }
+</style>
+</head>
+<body>
+<h1>CLPS Lunar Mission Browser</h1>
+<p id="sub">Sun and Earth elevation at candidate south-pole sites (JPL Horizons, DE441).</p>
+
+<label>Site height above surrounding terrain: <input id="h" type="range" min="0" max="3" step="0.1" value="0"> <b id="hv"></b>
+  <span style="color:var(--muted)">(raises the horizon; rims see sunlight that a flat sphere hides)</span></label>
+
+<div class="wrap"><table>
+  <thead><tr><th>Site</th><th>Sunlit</th><th>Earth in view</th><th>Both</th><th>Longest dark</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table></div>
+
+<div class="key"><span style="color:var(--sun)">━ Sun</span><span style="color:var(--earth)">━ Earth</span><span>┅ horizon</span><span style="background:var(--ok)">&nbsp;power + comms&nbsp;</span></div>
+<canvas id="c"></canvas>
+
+<script>
+const R = 1737.4; // lunar radius, km
+let data, sel = 0;
+
+const dipDeg = h => Math.acos(R / (R + h)) * 180 / Math.PI;
+const longestRun = flags => { let best = 0, cur = 0; for (const f of flags) { cur = f ? 0 : cur + 1; best = Math.max(best, cur); } return best; };
+console.assert(longestRun([1, 0, 0, 1, 0]) === 2, 'longestRun');
+
+function stats(s, h) {
+  const d = dipDeg(h), lit = s.sun.map(e => e > -d), com = s.earth.map(e => e > -d), n = lit.length;
+  const pct = a => Math.round(100 * a.filter(Boolean).length / n) + '%';
+  return [pct(lit), pct(com), pct(lit.map((x, i) => x && com[i])), longestRun(lit) * data.step_h + ' h'];
+}
+
+function render() {
+  const h = +document.getElementById('h').value;
+  document.getElementById('hv').textContent = h.toFixed(1) + ' km';
+  document.getElementById('rows').innerHTML = data.sites.map((s, i) =>
+    `<tr aria-selected="${i === sel}" data-i="${i}"><td>${s.name} <small style="color:var(--muted)">${s.lat}°, ${s.lon}°E</small></td>${stats(s, h).map(v => `<td>${v}</td>`).join('')}</tr>`).join('');
+  draw(data.sites[sel], -dipDeg(h));
+}
+
+function draw(s, horizon) {
+  const c = document.getElementById('c'), dpr = devicePixelRatio || 1;
+  c.width = c.clientWidth * dpr; c.height = c.clientHeight * dpr;
+  const g = c.getContext('2d'), W = c.width, H = c.height, css = getComputedStyle(document.documentElement);
+  const lo = -8, hi = 12, n = s.sun.length;
+  const x = i => i / (n - 1) * W, y = v => H - (v - lo) / (hi - lo) * H;
+  g.fillStyle = css.getPropertyValue('--ok');
+  s.sun.forEach((e, i) => { if (e > horizon && s.earth[i] > horizon) g.fillRect(x(i), 0, W / n + 1, H); });
+  g.strokeStyle = css.getPropertyValue('--muted'); g.setLineDash([4 * dpr, 4 * dpr]); g.lineWidth = dpr;
+  g.beginPath(); g.moveTo(0, y(horizon)); g.lineTo(W, y(horizon)); g.stroke(); g.setLineDash([]);
+  for (const [k, col] of [['sun', '--sun'], ['earth', '--earth']]) {
+    g.strokeStyle = css.getPropertyValue(col); g.lineWidth = 2 * dpr; g.beginPath();
+    s[k].forEach((v, i) => i ? g.lineTo(x(i), y(v)) : g.moveTo(x(i), y(v))); g.stroke();
+  }
+  g.fillStyle = css.getPropertyValue('--muted'); g.font = `${11 * dpr}px system-ui`;
+  g.fillText(`${hi}°`, 4, 12 * dpr); g.fillText(`${lo}°`, 4, H - 4); g.fillText(s.t[0], 40 * dpr, H - 4);
+  g.textAlign = 'right'; g.fillText(s.t[n - 1], W - 4, H - 4);
+}
+
+document.getElementById('h').oninput = render;
+document.getElementById('rows').onclick = e => { const tr = e.target.closest('tr'); if (tr) { sel = +tr.dataset.i; render(); } };
+addEventListener('resize', render);
+fetch('data.json').then(r => r.json()).then(d => {
+  data = d;
+  document.getElementById('sub').textContent += ` ${d.sites[0].t[0]} → ${d.sites[0].t.at(-1)} UTC, every ${d.step_h} h.`;
+  render();
+});
+</script>
+</body>
+</html>
